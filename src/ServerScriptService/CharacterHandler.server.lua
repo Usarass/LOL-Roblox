@@ -23,6 +23,11 @@ local function onCharacterAdded(player, modelCharacter)
     end
   end
 
+  local characterModule = PlayerStats.getCharacterModule(player)
+  if characterModule ~= '' then 
+    characterModule:Destroy()
+  end
+
   local characterModule = require( Characters[currentCharacter] )
   if not characterModule then
     warn("Character module not found for: " .. currentCharacter)
@@ -70,7 +75,19 @@ game:GetService('Players').PlayerAdded:Connect(function(player)
   player.CharacterAdded:Connect(function(character)
     onCharacterAdded(player, character)
 
+    print("Moing character to DamagableHumanoids")
     character.Parent = workspace.DamagableHumanoids
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+      warn("Humanoid not found in character model: " .. character.Name)
+      return
+    end
+
+    print("Setting health for", player.Name, "as", player:GetAttribute("CurrentCharacter"))
+    local baseHealth = CharactersLiterals.CharacterStats[player:GetAttribute("CurrentCharacter")].BaseHealth or 100
+    humanoid.MaxHealth = baseHealth
+    humanoid.Health = baseHealth
   end)
 end)
 

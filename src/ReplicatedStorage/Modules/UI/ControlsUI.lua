@@ -33,7 +33,8 @@ function ControlsUI.init()
     self.Skill2Button = screenGui.Skill2
     self.Skill3Button = screenGui.Skill3
     self.AttackButton = screenGui.AttackButton
-    self.RegenButton = screenGui.Skill5Regen
+    self.RegenButton = screenGui.Regen
+    self.RegenCooldownText = screenGui.Skill5Regen
 
     self.Skill1Name = screenGui.Controls_Skill_1
     self.Skill2Name = screenGui.Controls_Skill_2
@@ -43,24 +44,51 @@ function ControlsUI.init()
     self.SkillActivateButton2 = screenGui.SkillButton_2
     self.SkillActivateButton3 = screenGui.SkillButton_3
 
-    self.RegenButton = screenGui.Skill5Regen
+    self.currentImages = {}
 
     self.skillButtons = {
-      [self.SkillActivateButton1] = 'ActionF',
-      [self.SkillActivateButton2] = 'ActionE',
-      [self.SkillActivateButton3] = 'ActionC'
+      DefaultRange = {
+        [self.SkillActivateButton1] = "ActionF",
+        [self.SkillActivateButton2] = "ActionE",
+        [self.SkillActivateButton3] = "ActionC"
+      },
+
+      Default = {
+        [self.SkillActivateButton1] = "ActionR",
+        [self.SkillActivateButton2] = "ActionF",
+        [self.SkillActivateButton3] = "ActionC"
+      }
+    }
+
+    local UIAssets = game:GetService("ReplicatedStorage").Assets.UI
+    if not UIAssets then
+      warn("ControlsUI.init: UI assets not found in ReplicatedStorage")
+      return
+    end
+
+    self.ToCharacterSkillImage = {
+      Default = {
+        ActionF = UIAssets.Skill1Melee,
+        ActionE = UIAssets.Skill2Melee,
+        ActionC = UIAssets.Skill3Melee
+      },
+      DefaultRange = {
+        ActionF = UIAssets.Skill1Ranged,
+        ActionE = UIAssets.Skill2Ranged,
+        ActionC = UIAssets.Skill3Ranged
+      }
     }
 
     self.ToCharacterSkillName = {
       Default = {
-        Skill1Name = "ActionF",
-        Skill2Name = "ActionE",
-        Skill3Name = "ActionC"
+        Skill1Name = "Press R",
+        Skill2Name = "Press F",
+        Skill3Name = "Press C"
       },
       DefaultRange = {
-        Skill1Name = "ActionF",
-        Skill2Name = "ActionE",
-        Skill3Name = "ActionC"
+        Skill1Name = "F - AtkS & Damage",
+        Skill2Name = "E - Slow & Dmg",
+        Skill3Name = "C - Invis & Speed & +Dmg"
       }
     }
 
@@ -69,11 +97,18 @@ function ControlsUI.init()
         ActionC = self.Skill3Button,
         ActionE = self.Skill2Button,
         ActionF = self.Skill1Button,
+        Regen = self.RegenCooldownText
     }
 
+    self.skillButtonsConnections = {}
+
     self.characterBased()
-    self.skillActivateButtons()
     self.activateAttackButton()
+    self.activateLowButtons()
+
+    user.CharacterAdded:Connect(function()
+      self.characterBased()
+    end)
 
     return self
 end
@@ -81,31 +116,54 @@ end
 function ControlsUI.skillActivateButtons() --A method that inits activate buttons
   local self = ControlsUI
 
-  for button, actionName in next, self.skillButtons do
-    button.MouseButton1Click:Connect(function()
+  local currentCharacter = self.User:GetAttribute("CurrentCharacter")
+  if not currentCharacter then
+    warn("ControlsUI.skillActivateButtons: CurrentCharacter attribute not found on player")
+    return
+  end
+
+  local skillButtons = self.skillButtons[currentCharacter]
+  if not skillButtons then
+    warn("ControlsUI.skillActivateButtons: No skill buttons found for character: " .. currentCharacter)
+    return
+  end
+
+  for button, actionName in next, skillButtons do
+    local connection
+    connection = button.MouseButton1Down:Connect(function(x, y)
       local handleFunc = Controls:GetHandlerFunction(actionName)
       if not handleFunc then
         warn("ControlsUI.skillButtons: No handler function found for " .. actionName)
         return
       end
 
-      handleFunc(actionName, Enum.UserInputState.Begin)
+      handleFunc(actionName, Enum.UserInputState.Begin, {X = x, Y = y, UserInputType = Enum.UserInputType.Touch, UserInputState = Enum.UserInputState.Begin})
     end)
+
+    table.insert(self.skillButtonsConnections, connection)
   end
 end
 
 function ControlsUI.activateAttackButton()
   local self = ControlsUI
 
-  self.AttackButton.MouseButton1Click:Connect(function()
+  local hold = false
+  self.AttackButton.MouseButton1Down:Connect(function()
+    hold = true
     local handleFunc = Controls:GetHandlerFunction("LeftClick")
     if not handleFunc then
       warn("ControlsUI.activateAttackButton: No handler function found for LeftClick")
       return
     end
 
-    print("ControlsUI.activateAttackButton: Firing LeftClick action")
-    handleFunc("LeftClick", Enum.UserInputState.Begin)
+    while hold do
+      handleFunc("LeftClick", Enum.UserInputState.Begin)
+      task.wait(0.1)
+    end
+  end)
+
+  self.AttackButton.MouseButton1Up:Connect(function()
+    hold = false
   end)
 end
 
@@ -125,6 +183,34 @@ function ControlsUI.characterBased() --Makes all names in UIs character based
   ControlsUI.Skill1Name.Text = skillNames.Skill1Name
   ControlsUI.Skill2Name.Text = skillNames.Skill2Name
   ControlsUI.Skill3Name.Text = skillNames.Skill3Name
+
+  local skillImages = ControlsUI.ToCharacterSkillImage[currentCharacter]
+  if not skillImages then
+    warn("ControlsUI.characterBased: No skill images found for character: " .. currentCharacter)
+    return
+  end
+
+  local uiAssets = game:GetService("ReplicatedStorage").Assets.UI
+  for _, img in next, ControlsUI.currentImages do
+    img.Visible = false
+    img.Parent = uiAssets
+  end
+  table.clear(ControlsUI.currentImages)
+
+  local playerUI = ControlsUI.ScreenGui
+
+  for action, button in next, skillImages do
+    button.Visible = true
+    button.Parent = playerUI
+    ControlsUI.currentImages[action] = button
+  end
+
+  for _, connection in next, ControlsUI.skillButtonsConnections do
+    connection:Disconnect()
+  end
+
+  table.clear(ControlsUI.skillButtonsConnections)
+  ControlsUI.skillActivateButtons()
 end
 
 function ControlsUI.cooldown(cooldownName : string, cooldownDuration : number) --countdown the cooldown that are sent here
@@ -147,20 +233,25 @@ function ControlsUI.cooldown(cooldownName : string, cooldownDuration : number) -
     return
   end
 
+  local imageElement = ControlsUI.currentImages[cooldownName]
+  if not imageElement then
+    warn("CooldownVisual: No image element found for cooldown name: " .. tostring(cooldownName))
+    return
+  end
+  imageElement.ImageTransparency = 0.5
+
   if connections[cooldownName] then
     connections[cooldownName]:Disconnect()
     connections[cooldownName] = nil
   end
-
   uiElement.Text = cooldownName
-  
-  print("CooldownVisual: Starting cooldown for " .. cooldownName .. " with duration " .. tostring(cooldownDuration))
+
   connections[cooldownName] = game:GetService("RunService").RenderStepped:Connect(function(deltaTime)
-    -- print("CooldownVisual: Cooldown for " .. cooldownName .. " is " .. tostring(cooldown))
     if cooldownDuration <= 0 then
       uiElement.Text = "0"
       connections[cooldownName]:Disconnect()
       connections[cooldownName] = nil
+      imageElement.ImageTransparency = 0
       return
     end
 
@@ -173,6 +264,7 @@ function ControlsUI.activateLowButtons()
   local self = ControlsUI
 
   self.RegenButton.MouseButton1Click:Connect(function()
+    print("ControlsUI.activateLowButtons: Firing ReqRegen action")
     ReqRegen:Fire(true)
   end)
 end

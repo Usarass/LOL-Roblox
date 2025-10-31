@@ -25,6 +25,7 @@ function Keymap:BindAction(actionName : string, keyCodes : {Enum.KeyCode}, creat
     if mobileGui.Name ~= 'Mobile' then
       mobileGui.Name = 'Mobile'
       mobileGui.Parent = playerGui
+      mobileGui.ResetOnSpawn = false
     end
 
     local button = Instance.new('ImageButton') 

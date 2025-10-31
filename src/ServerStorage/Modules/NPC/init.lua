@@ -10,8 +10,10 @@ if not npcAssets then
   error("NPC models not found in ReplicatedStorage")
 end
 
-local NPCsLiterals = require(game:GetService("ReplicatedStorage").Literals.NPCs)
-local CooldownHandlerNPC = require(game:GetService('ServerStorage').Modules.CooldownNPC)
+local NPCsLiterals = require(game:GetService("ReplicatedStorage").Literals.Characters)
+local CooldownHandlerNPC = require(game:GetService('ServerStorage').Modules.Cooldown)
+local GoodSignal = require(game:GetService("ReplicatedStorage").Packages.GoodSignal)
+local StatusEffects = require(game:GetService("ServerStorage").Modules.StatusEffects)
 
 local Character = {
   Characters = {},
@@ -20,7 +22,7 @@ Character.__index = Character
 
 function Character.new(NPCName : string?, spawnCFrame : CFrame?)
   if not NPCName or not NPCsLiterals.CharactersNames[NPCName] then
-    NPCName = NPCsLiterals.CharactersNames['Default']
+    NPCName = NPCsLiterals.CharactersNames['NPCDefault']
   end
 
   local npcModel = npcAssets:FindFirstChild(NPCName)
@@ -35,6 +37,19 @@ function Character.new(NPCName : string?, spawnCFrame : CFrame?)
     spawnCFrame = CFrame.new(0, 2.5, 0) -- Default spawn position
   end
 
+  local npcHumanoid = npcModel:FindFirstChildOfClass("Humanoid")
+  if not npcHumanoid then
+    error("Humanoid not found in NPC model: " .. NPCName)
+  end
+
+  local baseHealth = NPCsLiterals.CharacterStats[NPCName].BaseHealth
+  if not baseHealth or type(baseHealth) ~= "number" then
+    error("BaseHealth not defined or invalid for NPC: " .. NPCName)
+  end
+
+  npcHumanoid.MaxHealth = baseHealth
+  npcHumanoid.Health = npcHumanoid.MaxHealth
+
   local self = setmetatable({
     NPCName = NPCName,
     Model = npcModel,
@@ -44,7 +59,23 @@ function Character.new(NPCName : string?, spawnCFrame : CFrame?)
       Regen = false,
       CurrentCharacter = NPCName
     },
+
+    CharacterModule = '',
+    StatusEffectChanged = GoodSignal.new(),
   }, Character)
+
+  self.StatusEffectChanged:Connect(function(self, changeDescription : StatusEffects.changeDescription)
+    local handler = StatusEffects.statusEffectHandlers[changeDescription.Name]
+    if not handler then print("No handler for status effect: " .. changeDescription.Name) return end
+
+    handler(self, changeDescription)
+  end)
+
+  for _, part in next, npcModel:GetDescendants() do
+    if part:IsA("BasePart") == false then continue end
+
+    part.CollisionGroup = "Character"
+  end
 
   for attributeName, attributeValue in next, self.ToAtributes do
     self.Model:SetAttribute(attributeName, attributeValue)
@@ -64,6 +95,10 @@ function Character.new(NPCName : string?, spawnCFrame : CFrame?)
   Character.Characters[npcModel] = self
 
   return self
+end
+
+function Character.getCharacterModule(NPCModel : Model)
+  return Character.Characters[NPCModel]
 end
 
 function Character:Regen()

@@ -5,12 +5,16 @@ local Warp = require(game:GetService("ReplicatedStorage").Packages.Warp)
 local CooldownHandler = require(game:GetService('ServerStorage').Modules.Cooldown)
 local StatusEffects = require(game:GetService('ServerStorage').Modules.StatusEffects)
 
-local PlayAnimation = Warp.Server('PlayAnimation')
-local StopAllAnimations = Warp.Server('StopAllAnimations')
+-- local PlayAnimation = Warp.Server('PlayAnimation')
+-- local StopAllAnimations = Warp.Server('StopAllAnimations')
 local PlaySound = Warp.Server('PlaySound')
 local SpecialEvent = Warp.Server('SpecialEvent')
 local EmitCirleAoE = Warp.Server('EmitCircleAoE')
 local SpecialEventFunc = Warp.Server('SpecialEventFunc')
+local EmitRemote = Warp.Server("Emit")
+
+local DamageService = require(game:GetService("ServerStorage").Services.DamageService)
+local PlayerStats = require(game:GetService("ServerStorage").Classes.Players)
 
 local arrowModel = game:GetService('ReplicatedStorage').Assets.Arrow
 
@@ -21,6 +25,7 @@ setmetatable(Default, { __index = Character })
 function Default.new(player : Player)
   local self = setmetatable(Character.new(player), Default)
   self.Parameters = {}
+  self.CharacterName = 'DefaultRange'
   self.ActionCReady = false
 
   for _, paramName in pairs(CharacterLiterals.CharacterStats.DefaultRange.ToCharacterParameters) do
@@ -95,13 +100,12 @@ function Default:DefaultAttack(enemyCharacter : Model)
   end
   
   if canAttack then
-    local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-    if not cooldownProfile then
+    if not CooldownHandler then
       warn("Cooldown profile not found for player: " .. self.Player.Name)
       return
     end
 
-    if cooldownProfile:Found('DefaultAttack') then return end
+    if CooldownHandler.Found(self.Player, 'DefaultAttack') then return end
 
     local animations = {
       `{currentCharacter}AttackDefault1`,
@@ -109,15 +113,14 @@ function Default:DefaultAttack(enemyCharacter : Model)
       `{currentCharacter}AttackDefault3`
     }
 
-    
-    cooldownProfile:Add('DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.DefaultAttackSpeed)
+    CooldownHandler.Add(self.Player, 'DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.AttackSpeed)
 
     -- StopAllAnimations:Fire(true, self.Player)
     -- PlayAnimation:Fire(true, self.Player, animations[math.random(1, #animations)], {
-    --   AnimationSpeed = currentStats.DefaultAttackSpeed,
+    --   AnimationSpeed = currentStats.AttackSpeed,
     -- })
-    task.wait(currentStats.DefaultAttackDelay / currentStats.DefaultAttackSpeed)
-    task.delay(currentStats.DefaultAttackAfterHitDelay / currentStats.DefaultAttackSpeed, function()
+    task.wait(currentStats.DefaultAttackDelay / currentStats.AttackSpeed)
+    task.delay(currentStats.DefaultAttackAfterHitDelay / currentStats.AttackSpeed, function()
       self.InUse = false
     end)
     PlaySound:Fires(true, CharacterLiterals.CharacterStats.DefaultRange.Sounds[`{currentCharacter}Fire`], {
@@ -166,7 +169,8 @@ function Default:DefaultAttack(enemyCharacter : Model)
           PlaySound:Fires(true, CharacterLiterals.CharacterStats.DefaultRange.Sounds[`{currentCharacter}Hit`], {
             Parent = playerRootPart,
           })
-          enemyHumanoid:TakeDamage(currentStats.DefaultAttackDamage * currentStats.DefaultAttackDamageMultiplier)
+          enemyHumanoid:TakeDamage(DamageService.CalculateAndApplyDamage(self.Player, enemyRootPart.Parent, currentStats.DefaultAttackDamage))
+          
           connection:Disconnect()
       end
     end)
@@ -196,46 +200,62 @@ function Default:DefaultAttack(enemyCharacter : Model)
 end
 
 function Default:ActionF()
-  local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-  if not cooldownProfile then
+  if not CooldownHandler then
     warn("Cooldown profile not found for player: " .. self.Player.Name)
     return
   end
 
   local parameters = self.Parameters
 
-  if cooldownProfile:Found('ActionF') then return end
-  cooldownProfile:Add('ActionF', parameters.ActionFCooldown)
+  if CooldownHandler.Found(self.Player, 'ActionF') then return end
+  CooldownHandler.Add(self.Player, 'ActionF', parameters.ActionFCooldown)
 
-  local statusEffectProfile = StatusEffects.get(self.Player)
-  if not statusEffectProfile then
-    warn("Status effect profile not found for player: " .. self.Player.Name)
-    return
-  end
-  
   print("Action F used by player: " .. self.Player.Name)
-  statusEffectProfile:ApplyEffect('Damage', parameters.ActionFDamageBuff, parameters.ActionFDamageBuffDuration) --parameters.ActionFAttackSpeedBuff
-  statusEffectProfile:ApplyEffect('AttackSpeed', parameters.ActionFAttackSpeedBuff, parameters.ActionFAttackSpeedBuffDuration)
+
+  -- local statusEffectProfile = StatusEffects.get(self.Player)
+  -- if not statusEffectProfile then
+  --   warn("Status effect profile not found for player: " .. self.Player.Name)
+  --   return
+  -- end
+  
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = 'AttackSpeed',
+    EffectName = 'ActionFAttackSpeedBuff',
+    Percentage = parameters.ActionFAttackSpeedBuff,
+    Duration = parameters.ActionFAttackSpeedBuffDuration,
+    AffectedModule = self,
+  })
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = 'DamageMultiplier',
+    EffectName = 'ActionFDamageBuff',
+    Percentage = parameters.ActionFDamageBuff,
+    Duration = parameters.ActionFDamageBuffDuration,
+    AffectedModule = self,
+  })
+
+  EmitRemote:Fires(true, 'Star', {
+    Duration = parameters.ActionFDamageBuffDuration,
+    Model = self.Player.Character,
+  })
+  -- print("Action F used by player: " .. self.Player.Name)
+  -- statusEffectProfile:ApplyEffect('Damage', parameters.ActionFDamageBuff, parameters.ActionFDamageBuffDuration) --parameters.ActionFAttackSpeedBuff
+  -- statusEffectProfile:ApplyEffect('AttackSpeed', parameters.ActionFAttackSpeedBuff, parameters.ActionFAttackSpeedBuffDuration)
 end
 
 function Default:ActionC()
-  local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-  if not cooldownProfile then
+  if not CooldownHandler then
     warn("Cooldown profile not found for player: " .. self.Player.Name)
-    return
-  end
-
-  local statusEffectProfile = StatusEffects.get(self.Player)
-  if not statusEffectProfile then
-    warn("Status effect profile not found for player: " .. self.Player.Name)
     return
   end
 
   local character = self.Player.Character
   if not character then return end
 
-  if cooldownProfile:Found('ActionC') then return end
-  cooldownProfile:Add('ActionC', self.Parameters.ActionCCooldown)
+  if CooldownHandler.Found(self.Player, 'ActionC') then return end
+  CooldownHandler.Add(self.Player, 'ActionC', self.Parameters.ActionCCooldown)
 
   local previousTransparency = {}
   for _, part in next, character:GetDescendants() do
@@ -252,9 +272,41 @@ function Default:ActionC()
   end
 
   print("Action C used by player: " .. self.Player.Name)
-  statusEffectProfile:ApplyEffect('Damage', self.Parameters.ActionCDamageBuff, self.Parameters.ActionCDamageBuffDuration)
-  statusEffectProfile:ApplyEffect('AttackSpeed', self.Parameters.ActionCAttackSpeedBuff, self.Parameters.ActionCAttackSpeedBuffDuration)
-  statusEffectProfile:ApplyWalkSpeedEffect('ActionCWalkSpeedBuff', self.Parameters.ActionCWalkSpeedBuff, self.Parameters.ACtionCWalkSpeedBuffDuration)
+
+  local parameters = self.Parameters
+
+  print(parameters.ACtionCWalkSpeedBuffDuration)
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = 'WalkspeedMultiplier',
+    EffectName = 'ActionCWalkSpeedBuff',
+    Percentage = parameters.ActionCWalkSpeedBuff,
+    Duration = parameters.ACtionCWalkSpeedBuffDuration,
+    AffectedModule = self,
+  })
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = 'AttackSpeed',
+    EffectName = 'ActionCAttackSpeedBuff',
+    Percentage = parameters.ActionCAttackSpeedBuff,
+    Duration = parameters.ActionCAttackSpeedBuffDuration,
+    AffectedModule = self,
+  })
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = 'DamageMultiplier',
+    EffectName = 'ActionCDamageBuff',
+    Percentage = parameters.ActionCDamageBuff,
+    Duration = parameters.ActionCDamageBuffDuration,
+    AffectedModule = self,
+  })
+
+  -- statusEffectProfile:ApplyEffect('Damage', self.Parameters.ActionCDamageBuff, self.Parameters.ActionCDamageBuffDuration)
+  -- statusEffectProfile:ApplyEffect('AttackSpeed', self.Parameters.ActionCAttackSpeedBuff, self.Parameters.ActionCAttackSpeedBuffDuration)
+  -- statusEffectProfile:ApplyWalkSpeedEffect('ActionCWalkSpeedBuff', self.Parameters.ActionCWalkSpeedBuff, self.Parameters.ACtionCWalkSpeedBuffDuration)
 
   task.wait(self.Parameters.ACtionCWalkSpeedBuffDuration)
   for part, transparency in next, previousTransparency do
@@ -262,29 +314,30 @@ function Default:ActionC()
   end
 end
 
-function Default:ActionE()
-  local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-  if not cooldownProfile then
+function Default:ActionE(inputObj : InputObject)
+  if not CooldownHandler then
     warn("Cooldown profile not found for player: " .. self.Player.Name)
     return
   end
 
-  if cooldownProfile:Found('ActionE') or cooldownProfile:Found('ActionESmall') then return end
+  if CooldownHandler.Found(self.Player, 'ActionE') or CooldownHandler.Found(self.Player, 'ActionESmall') then return end
 
   local params = self.Parameters
   if self.ActionCReady == false then 
-    SpecialEvent:Fire(true, self.Player, "MarksmenCircle")
+    print(inputObj)
+    SpecialEvent:Fire(true, self.Player, "MarksmenCircle", inputObj)
 
     self.ActionCReady = true
-    -- cooldownProfile:Add('ActionESmall', params.ActionEBetweenCooldown)
+    -- CooldownHandler.Add('ActionESmall', params.ActionEBetweenCooldown)
     return
   end
 
   print("Action E used by player: " .. self.Player.Name)
-  SpecialEvent:Fire(true, self.Player, "MarksmenCircleCancel")
 
   local unitRay = SpecialEventFunc:Invoke(2, self.Player, "GetCursorRay")
   if not unitRay then return end
+
+  SpecialEvent:Fire(true, self.Player, "MarksmenCircleCancel")  
 
   local character = self.Player.Character
   if not character then return end
@@ -332,14 +385,14 @@ function Default:ActionE()
 
   local hitDistance = params.ActionEReachDistance * Consts.MeterToStudsMultiplier
 
-  SpecialEvent:Fires(true, 'Arrows', self.Player, hitPosition, params.DefaultAttackSpeed)
-  cooldownProfile:Add('ActionESmall', params.ActionEBetweenCooldown)
-  task.wait(params.ActionEDelay / params.DefaultAttackSpeed)
+  SpecialEvent:Fires(true, 'Arrows', self.Player, hitPosition, params.AttackSpeed)
+  CooldownHandler.Add(self.Player, 'ActionESmall', params.ActionEBetweenCooldown)
+  task.wait(params.ActionEDelay / params.AttackSpeed)
 
   local isHit = false
 
   for _, enemyCharacter in next, workspace.DamagableHumanoids:GetDescendants() do
-    if enemyCharacter:IsA("Model") == false then continue end
+    if enemyCharacter:IsA("Model") == false or enemyCharacter == character then continue end
 
     local enemyHumanoid = enemyCharacter:FindFirstChildWhichIsA("Humanoid")
     if not enemyHumanoid or enemyHumanoid.Health <= 0 then continue end
@@ -350,21 +403,34 @@ function Default:ActionE()
     local distanceBetween = (enemyRootPart.Position - hitPosition).Magnitude
 
     if distanceBetween < hitDistance then
-      enemyHumanoid:TakeDamage(params.ActionEDamage * params.DefaultAttackDamageMultiplier)
+      enemyHumanoid:TakeDamage(DamageService.CalculateAndApplyDamage(self.Player, enemyRootPart.Parent, params.ActionEDamage))
       isHit = true
 
-      local statusEffectProfile = StatusEffects.get(enemyCharacter)
-      if not statusEffectProfile then continue end
+      StatusEffects.ApplyEffect({
+        User = enemyRootPart.Parent,
+        Name = "WalkspeedMultiplier",
+        EffectName = "ActionEWalkSpeedDebuff",
+        Percentage = params.ActionEWalkSpeedSlowdown,
+        Duration = params.ActionEWalkSpeedSlowdownDuration,
+        AffectedModule = PlayerStats.getCharacterModule(enemyRootPart.Parent),
+      })
 
-      statusEffectProfile:ApplyWalkSpeedEffect('ActionEWalkSpeedDebuff', params.ActionEWalkSpeedSlowdown, params.ActionEWalkSpeedSlowdownDuration)
+      -- local statusEffectProfile = StatusEffects.get(enemyCharacter)
+      -- if not statusEffectProfile then continue end
+
+      -- statusEffectProfile:ApplyWalkSpeedEffect('ActionEWalkSpeedDebuff', params.ActionEWalkSpeedSlowdown, params.ActionEWalkSpeedSlowdownDuration)
     end
   end
 
   if isHit then
-    cooldownProfile:Add('ActionE', params.ActionECooldown)
+    CooldownHandler.Add(self.Player, 'ActionE', params.ActionECooldown)
   end
 
   self.ActionCReady = false
+end
+
+function Default:Destroy()
+  
 end
 
 return Default

@@ -1,3 +1,5 @@
+local NPCinitModule = require(game:GetService("ServerStorage").Modules.NPC)
+
 local PlayerStats = {Players = {}}
 PlayerStats.__index = PlayerStats
 
@@ -24,9 +26,17 @@ function PlayerStats.new(player : Player, currentCharacter : string?)
 end
 
 function PlayerStats.get(player : Player)
-  if not player or not player:IsA("Player") then
-    warn("Invalid player provided to PlayerStats.get")
+  if not player or typeof(player) ~= 'Instance' then
+    -- warn("Invalid player provided to PlayerStats.get")
     return
+  end
+
+  if player:IsA("Model") then
+    player = game.Players:GetPlayerFromCharacter(player)
+    if not player then
+      -- warn("Could not find player from character model")
+      return
+    end
   end
 
   if not PlayerStats.Players[player.UserId] then
@@ -37,9 +47,19 @@ function PlayerStats.get(player : Player)
   return PlayerStats.Players[player.UserId]
 end
 
+function PlayerStats.getNPCModule(model : Model)
+  return NPCinitModule.getCharacterModule(model)
+end
+
 function PlayerStats.getCharacterModule(player : Player)
   local playerStats = PlayerStats.get(player)
-  if not playerStats then return nil end
+  if not playerStats then
+    playerStats = PlayerStats.getNPCModule(player)
+    if not playerStats then
+      warn("PlayerStats: Could not find stats for player or NPC model")
+      return
+    end 
+  end
 
   return playerStats.CharacterModule
 end

@@ -33,6 +33,10 @@ function SwitchCharacter.init()
 
     self.CharacterFrameTemplate = self.CharacterHolder:WaitForChild('CharacterFrameTemplate', 10)
 
+    self.IgnoreCharacterName = {
+      CharactersLiterals.CharactersNames.NPCDefault
+    }
+
     self.OpenToClose = {
       'InGamePhoneGui'
     }
@@ -54,7 +58,12 @@ function SwitchCharacter.render()
     frame:Destroy()
   end
 
+  print(SwitchCharacter.IgnoreCharacterName)
+
   for _, character in next, CharactersLiterals.CharactersNames do
+    if table.find(SwitchCharacter.IgnoreCharacterName, character) then
+      continue
+    end 
     -- print("Rendering character: " .. character)
     local characterFrame = CharacterFrameTemplate:Clone()
     local characterImage = characterFrame:FindFirstChild("CharacterImage")

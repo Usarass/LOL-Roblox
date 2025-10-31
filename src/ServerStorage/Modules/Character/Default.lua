@@ -10,6 +10,11 @@ local PlaySound = Warp.Server('PlaySound')
 local EmitCirleAoE = Warp.Server('EmitCircleAoE')
 local SpecialEvent = Warp.Server('SpecialEvent')
 local SpecialEventFunc = Warp.Server('SpecialEventFunc')
+local EmitRemote = Warp.Server("Emit")
+
+local DamageService = require(game:GetService("ServerStorage").Services.DamageService)
+local StatusEffects = require(game:GetService("ServerStorage").Modules.StatusEffects)
+local PlayerStats = require(game:GetService("ServerStorage").Classes.Players)
 
 local damagableHumanoids = workspace.DamagableHumanoids
 
@@ -21,13 +26,47 @@ function Default.new(player : Player)
   print("Creating Default character for player: " .. player.Name)
   local self = setmetatable(Character.new(player), Default)
   self.Parameters = {}
+  self.CharacterName = 'Default'
   self.DashCharged = false
+  self.ActionCHealBuff = false
+  self.ActionFReady = false
+  self.Connections = {}
 
   for _, paramName in pairs(CharacterLiterals.CharacterStats.Default.ToCharacterParameters) do
     self.Parameters[paramName] = CharacterLiterals.CharacterStats.Default[paramName]
   end
 
+  local connection 
+  connection = DamageService.DamageAccepted:Connect(function(attacker, target, damage)
+    print("DamageService: Damage accepted from " .. tostring(attacker) .. " to " .. tostring(target) .. " for " .. tostring(damage))
+    if attacker ~= player or self.ActionCHealBuff == false then return end
+
+    local character = attacker.Character or typeof(attacker) == "Instance" and attacker:Is("Model") and attacker or nil
+    if not character then return end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+
+    local newHealth = math.clamp(humanoid.Health + self.Parameters.ActionCHeal, 0, humanoid.MaxHealth)
+    humanoid.Health = newHealth
+  end)
+  table.insert(self.Connections, connection)
+
+  player.AncestryChanged:Connect(function(_, parent)
+    if parent == nil then
+      self:Destroy()
+    end
+  end)
+
   return self
+end
+
+function Default:Destroy()
+  for _, conn in pairs(self.Connections) do
+    conn:Disconnect()
+  end
+
+  self = nil
 end
 
 function Default:OnLeftClick()
@@ -67,8 +106,11 @@ function Default:OnLeftClick()
   --   end
   -- end
 
+  local character = self.Player.Character
+  if not character then print("Player character not found") return end
+
   for _, enemyCharacter in pairs(damagableHumanoids:GetDescendants()) do
-    if enemyCharacter:IsA("Model") == false then continue end
+    if enemyCharacter:IsA("Model") == false or enemyCharacter == character then continue end
 
     local enemyHumanoid = enemyCharacter:FindFirstChildOfClass("Humanoid")
     if not enemyHumanoid or enemyHumanoid.Health <= 0 then continue end
@@ -160,39 +202,36 @@ function Default:DefaultAttack(enemyCharacter : Model)
 
   if canAttack then
     print("Performing default attack for player: " .. self.Player.Name)
-    local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-    if not cooldownProfile then
+    if not CooldownHandler then
       warn("Cooldown profile not found for player: " .. self.Player.Name)
       return
     end
-    
-    if cooldownProfile:Found('DefaultAttack') then return end
 
-    local animations = {
-      `{currentCharacter}AttackDefault1`,
-      `{currentCharacter}AttackDefault2`,
-      `{currentCharacter}AttackDefault3`
-    }
+    if CooldownHandler.Found(self.Player, 'DefaultAttack') then print('Found DefaultAttack cooldown') return end
 
     self.InUse = true
-    cooldownProfile:Add('DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.DefaultAttackSpeed)
+    CooldownHandler.Add(self.Player, 'DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.AttackSpeed)
+
+    local randomAnimation = math.random(1, 3)
+    randomAnimation = `DefaultAttackP{randomAnimation}`
 
     StopAllAnimations:Fire(true, self.Player)
-    PlayAnimation:Fire(true, self.Player, animations[math.random(1, #animations)], {
-      AnimationSpeed = currentStats.DefaultAttackSpeed,
+    PlayAnimation:Fire(true, self.Player, randomAnimation, {
+      AnimationSpeed = currentStats.AttackSpeed,
     })
-    PlaySound:Fires(true, fullStats.Sounds[`{currentCharacter}Whoosh`], {
+    PlaySound:Fires(true, fullStats.Sounds["Whoosh"], {
       Parent = playerRootPart,
     })
-    task.wait(currentStats.DefaultAttackDelay / currentStats.DefaultAttackSpeed) -- Wait for certain frame in the aniamtion
-    task.delay(currentStats.DefaultAttackAfterHitDelay / currentStats.DefaultAttackSpeed, function()
+    task.wait(currentStats.DefaultAttackDelay / currentStats.AttackSpeed) -- Wait for certain frame in the aniamtion
+    task.delay(currentStats.DefaultAttackAfterHitDelay / currentStats.AttackSpeed, function()
       self.InUse = false
     end)
 
     if ((enemyRootPart.Position - playerRootPart.Position).Magnitude < attackDistance * Consts.MeterToStudsMultiplier) then
       -- Deal damage to the enemy character
-      enemyHumanoid:TakeDamage(currentStats.DefaultAttackDamage * currentStats.DefaultAttackDamageMultiplier)
-      PlaySound:Fires(true, fullStats.Sounds[`{currentCharacter}LandedPunch`], {
+      -- enemyHumanoid:TakeDamage(currentStats.DefaultAttackDamage * currentStats.DamageMultiplier)
+      enemyHumanoid:TakeDamage(DamageService.CalculateAndApplyDamage(self.Player, enemyCharacter, currentStats.DefaultAttackDamage))
+      PlaySound:Fires(true, fullStats.Sounds["LandedPunch"], {
         Parent = playerRootPart,
       })
     end
@@ -200,6 +239,8 @@ function Default:DefaultAttack(enemyCharacter : Model)
 end
 
 function Default:ActionR(inputState)
+  if inputState ~= Enum.UserInputState.End and inputState ~= Enum.UserInputState.Begin then return end
+
   local character = self.Player.Character
   if not character then return end
 
@@ -209,26 +250,181 @@ function Default:ActionR(inputState)
   local rootPart = character:FindFirstChild("HumanoidRootPart")
   if not rootPart then return end
 
-  local cooldownProfile = CooldownHandler.GetProfile(self.Player)
-  if not cooldownProfile then
-    warn("Cooldown profile not found for player: " .. self.Player.Name)
-    return
-  end
-
   print("Dash input state for player: " .. self.Player.Name .. " is " .. tostring(inputState))
-  if self.DashCharged and inputState == Enum.UserInputState.End then 
-    cooldownProfile:Add('Dash', self.Parameters.DashCooldown)
+  if self.DashCharged then 
+    CooldownHandler.Add(self.Player, 'ActionF', self.Parameters.DashCooldown)
     self.DashCharged = false
     print("Dashing for player: " .. self.Player.Name)
     SpecialEvent:Fire(true, self.Player, "Dash")
+    
+    return
+  end
+
+  if CooldownHandler.Found(self.Player, 'ActionF') then return end
+
+  if inputState == Enum.UserInputState.End then return end
+  SpecialEvent:Fire(true, self.Player, "DashVisual")
+  self.DashCharged = true
+end
+
+function Default:ActionC()
+  if CooldownHandler.Found(self.Player, 'ActionC') then return end
+  CooldownHandler.Add(self.Player, 'ActionC', self.Parameters.ActionCCooldown)
+
+  local character = self.Player.Character
+  if not character then return end
+
+  local currentParams = self.Parameters
+
+  self.ActionCHealBuff = true
+  task.delay(currentParams.ActionCHealDuration, function()
+    self.ActionCHealBuff = false
+  end)
+
+  local previousTransparency = {}
+  for _, part in next, character:GetDescendants() do
+    if part:IsA("Decal") == true then
+      previousTransparency[part] = part.Transparency
+      part.Transparency = currentParams.ActionCTransparency
+      
+      continue 
+    end
+    if part:IsA("BasePart") == false or part.Name == 'Hitbox' then continue end
+
+    previousTransparency[part] = part.Transparency
+    part.Transparency = currentParams.ActionCTransparency
+  end
+
+  task.delay(currentParams.ActionCInvisibilityDuration, function()
+    for part, transparency in pairs(previousTransparency) do
+      if part and part.Parent then
+        part.Transparency = transparency
+      end
+    end
+  end)
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = "WalkspeedMultiplier",
+    EffectName = "ActionCWalkSpeedBuff",
+    Percentage = currentParams.ActionCWalkSpeedBuff,
+    Duration = currentParams.ActionCWalkSpeedBuffDuration,
+    AffectedModule = self
+  })
+
+  StatusEffects.ApplyEffect({
+    User = self.Player,
+    Name = "Resistance",
+    EffectName = "ActionCDamageResistanceBuff",
+    Percentage = currentParams.ActionCDamageResistanceBuff,
+    Duration = currentParams.ActionCDamageResistanceBuffDuration,
+    AffectedModule = self
+  })
+
+  EmitRemote:Fires(true, 'Shield', {
+    Duration = currentParams.ActionCDamageResistanceBuffDuration,
+    Model = character,
+  })
+end
+
+function Default:ActionF(inputState)
+  if CooldownHandler.Found(self.Player, 'ActionE') then return end
+  print("ActionF called for player: " .. self.Player.Name)
+
+  if self.ActionFReady then 
+    CooldownHandler.Add(self.Player, 'ActionE', self.Parameters.ActionFCooldown)
+    self.ActionFReady = false
+
+    local character = self.Player.Character
+    if not character then return end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+
+    local currentStats = self.Parameters
+
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {character}
+
+    local previousCollisions = {}
+
+    for _, part in pairs(character:GetDescendants()) do
+      if part:IsA("BasePart") == false then
+        continue
+      end
+
+      previousCollisions[part] = part.CollisionGroup
+      part.CollisionGroup = "NoCharacterCollisions"
+    end
+
+    task.delay(currentStats.ActionFNoCollisionDuration, function()
+      for part, collisionGroup in pairs(previousCollisions) do
+        if part and part.Parent then
+          part.CollisionGroup = collisionGroup
+        end
+      end
+    end)
+
+    local connection 
+    connection = game:GetService('RunService').Stepped:Connect(function(deltaTime)
+      local result = workspace:Raycast(rootPart.Position, rootPart.CFrame.LookVector * currentStats.ActionFRaycastMultiplier, raycastParams)
+      if not result or not result.Instance then return end
+
+      local hitPart = result.Instance
+      local hitCharacter = hitPart:FindFirstAncestorOfClass("Model")
+      if not hitCharacter then return end
+
+      local hitHumanoid = hitCharacter:FindFirstChildOfClass("Humanoid")
+      if not hitHumanoid or hitHumanoid.Health <= 0 then return end
+
+      connection:Disconnect()
+      hitHumanoid:TakeDamage( DamageService.CalculateAndApplyDamage(self.Player, hitCharacter, currentStats.ActionFDamage) )
+
+      local characterModule = PlayerStats.getCharacterModule(hitCharacter)
+
+      StatusEffects.ApplyEffect({
+        User = hitCharacter,
+        Name = "WalkspeedMultiplier",
+        EffectName = "ActionFTargetWalkSpeedDebuff",
+        Percentage = currentStats.ActionFTargetWalkSpeedSlowdown,
+        Duration = currentStats.ActionFTargetWalkSpeedDuration,
+        AffectedModule = characterModule,
+      })
+
+      StatusEffects.ApplyEffect({
+        User = hitCharacter,
+        Name = "AttackSpeed",
+        EffectName = "ActionFTargetAttackSpeedDebuff",
+        Percentage = currentStats.ActionFTargetAttackSpeedSlowdown,
+        Duration = currentStats.ActionFTargetAttackSpeedDuration,
+        AffectedModule = characterModule,
+      })
+
+      StatusEffects.ApplyEffect({
+        User = self.Player,
+        Name = "AttackSpeed",
+        EffectName = "ActionFAttackSpeedBuff",
+        Percentage = currentStats.ActionFAttackSpeedBuff,
+        Duration = currentStats.ActionFAttackSpeedBuffDuration,
+        AffectedModule = self
+      })
+    end)
+
+    task.delay(currentStats.ActionFRaycastDuration, function()
+      if not connection then return end
+
+      connection:Disconnect()
+    end)
+
+    SpecialEvent:Fire(true, self.Player, "SlashUsed")
 
     return
   end
 
-  if cooldownProfile:Found('Dash') or inputState ~= Enum.UserInputState.Begin then return end
-
-  SpecialEvent:Fire(true, self.Player, "DashVisual")
-  self.DashCharged = true
+  if inputState == Enum.UserInputState.End then return end
+  self.ActionFReady = true
+  SpecialEvent:Fire(true, self.Player, "SlashReady")
 end
 
 return Default

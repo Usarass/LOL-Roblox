@@ -1,5 +1,5 @@
 --!strict
-local NPCDefaultName = 'Default'
+local NPCDefaultName = 'NPCDefault'
 
 return {
   CharactersNames = {
@@ -8,11 +8,14 @@ return {
 
   CharacterStats = {
     [NPCDefaultName] = {
+      AttackSpeed = 1, -- 1 Means normal speed, 2 means double speed, etc. (so the animation will be played twice as fast)
+      BaseSpeed = 8,
+      WalkspeedMultiplier = 1, -- 1 Means normal speed, 2 means double speed, etc.
+
       DefaultAttackDamage = 10,
       DefaultAttackDistance = 1.5, -- In meters
       ReachDistance = 7, --A diameter in meters
       DefaultAttackCooldown = .8, -- In seconds
-      DefaultAttackSpeed = 1, -- 1 Means normal speed, 2 means double speed, etc. (so the animation will be played twice as fast)
       DefaultAttackDelay = 0.45, -- In seconds
       RegenPerSecond = 20, -- Health points per second
 
@@ -24,6 +27,9 @@ return {
         'DefaultAttackSpeed',
         'DefaultAttackDelay',
         'RegenPerSecond',
+        'AttackSpeed',
+        'BaseSpeed',
+        'WalkspeedMultiplier',
       },
 
       Animation = {

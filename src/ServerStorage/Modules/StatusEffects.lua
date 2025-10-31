@@ -1,95 +1,143 @@
-local PlayerStats = require(game:GetService("ServerStorage").Classes.Players)
-local CharactersLiterals = require(game:GetService("ReplicatedStorage").Literals.Characters)
+local StatusEffects = {}
 
-local ToParametersName = {
-  AttackSpeed = "DefaultAttackSpeed",
-  Damage = "DefaultAttackDamageMultiplier",
+local registries = {}
+
+export type StatusEffectDescription = {
+  User : Player | Model,
+  Name: string,
+  Percentage: number,
+  Duration: number,
+  AffectedModule: {}
 }
 
-local StatusEffects = {
-  Profiles = {},
+export type changeDescription = {
+  ParameterName : string,
+  NewValue : number,
+  OldValue : number
 }
-StatusEffects.__index = StatusEffects
 
-function StatusEffects.new(player : Player)
-  local self = setmetatable({
-    Owner = player,
-    WalkspeedStatusEffects = {},
-    WalkspeedMultiplier = 1,
-  }, StatusEffects)
+StatusEffects.statusEffectHandlers = {
+  WalkspeedMultiplier = function(self, changeDescription : changeDescription)
+    local params = self.Parameters
+    if not params then warn('No parameters found for character: ' .. tostring(self.CharacterName)) return end
 
-  StatusEffects.Profiles[player] = self
-  return self
-end
+    local baseWalkSpeed = params.BaseWalkSpeed
+    if not baseWalkSpeed then warn('No base walkspeed found for character: ' .. tostring(self.CharacterName)) return end
 
-function StatusEffects:ApplyEffect(effectName : string, effectPercentage : number, duration : number)
-  local parameterName = ToParametersName[effectName]
-  if not parameterName then warn('No parameter name found') return end
+    local character
+    if self.Player then 
+      character = self.Player.Character
+    else
+      character = self.Model
+    end
+    if not character then warn('No character found for player: ' .. self.Player.Name) return end
 
-  local normalizedPercentage = effectPercentage / 100
-  local characterModule = PlayerStats.getCharacterModule(self.Owner)
-  if not characterModule then warn('No character module found') return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then warn('No humanoid found in character for player: ' .. self.Player.Name) return end
 
-  print("Applying effect:", effectName, "to player:", self.Owner.Name, "with percentage:", effectPercentage, "for duration:", duration)
-  characterModule.Parameters[parameterName] += normalizedPercentage
-  task.delay(duration, function()
-    characterModule.Parameters[parameterName] -= normalizedPercentage
-    print("Effect expired:", effectName, "for player:", self.Owner.Name)
-  end)
-end
-
-function StatusEffects:ApplyWalkSpeedEffect(effectName : string, effectPercentage : number, effectDuration : number)
-  if self.WalkspeedStatusEffects[effectName] then self.WalkspeedStatusEffects[effectName] = effectDuration  return end
-
-  local isPlayer = self.Owner:IsA("Player")
-
-  local character
-  if isPlayer == false then
-    character = self.Owner
-  else 
-    character = self.Owner.Character  
+    humanoid.WalkSpeed = baseWalkSpeed * changeDescription.NewValue
   end
-  if not character then warn('No character found') return end
+}
 
-  local humanoid = character:FindFirstChildOfClass("Humanoid")
-  if not humanoid then warn('No humanoid found') return end
+function StatusEffects.AddToRegistry(user : Player | Model)
+  if not user then warn('No user found') return end
+  if registries[user] then return registries[user] end
 
-  
-  local selectedCharacter = self.Owner:GetAttribute("CurrentCharacter")
-  if not selectedCharacter then warn('No selected character found') return end
+  registries[user] = {}
 
-  local normalizedPercentage = effectPercentage / 100
-  self.WalkspeedStatusEffects[effectName] = effectDuration
-  self.WalkspeedMultiplier += normalizedPercentage
+  user.AncestryChanged:Connect(function(_, parent)
+    if not parent then
+      registries[user] = nil
+    end
+  end)
 
-  local baseWalkSpeed = CharactersLiterals.CharacterStats[selectedCharacter].BaseWalkSpeed
-  humanoid.WalkSpeed = baseWalkSpeed * self.WalkspeedMultiplier
+  return registries[user]
+end
 
-  local connection
+function StatusEffects.ApplyEffect(effectDescription : StatusEffectDescription)
+  if not effectDescription.User then warn('No user found') return end
+  if not effectDescription.Name then warn('No effect name found') return end
+  if not effectDescription.Percentage then warn('No effect percentage found') return end
+  if not effectDescription.Duration then warn('No effect duration found') return end
+  if not effectDescription.AffectedModule then warn('No affected module found') return end
+
+  local user = effectDescription.User
+
+  local normalizedPercentage = effectDescription.Percentage / 100
+  local characterModule = effectDescription.AffectedModule
+
+  local userRegistry = StatusEffects.AddToRegistry(user)
+  local paramName = effectDescription.Name
+
+  local effectName = effectDescription.EffectName
+  if not effectName then
+    warn('No effect name provided, using parameter name as effect name')
+    effectName = paramName
+  end
+
+  local changeSignal = characterModule.StatusEffectChanged
+  if not changeSignal then print('No change signal found') end
+
+  if userRegistry[effectName] then
+    print('Effect already applied, refreshing duration: ' .. effectDescription.Name .. ' for user: ' .. tostring(user))
+    userRegistry[effectName].TimeLeft += effectDescription.Duration
+    return
+  else
+    userRegistry[effectName] = {
+      TimeLeft = effectDescription.Duration,
+      Percentage = normalizedPercentage,
+      AffectedModule = characterModule
+    }
+  end
+
+  print('currentPercentage:', characterModule.Parameters[paramName] + normalizedPercentage)
+  characterModule.Parameters[paramName] += normalizedPercentage
+  -- pr
+  print('changedPercentage:', characterModule.Parameters[paramName])
+  print('Applied effect: ' .. effectDescription.Name .. ' to user: ' .. tostring(user) .. ' with percentage: ' .. tostring(normalizedPercentage) .. ' for duration: ' .. tostring(effectDescription.Duration) .. ' seconds')
+
+  if changeSignal then
+    changeSignal:Fire(characterModule,{
+      Name = paramName,
+      NewValue = characterModule.Parameters[paramName],
+      OldValue = characterModule.Parameters[paramName] - normalizedPercentage
+    })
+  end
+
+  if effectDescription.Duration < 0 then return end --If duration is negative, the effect is permanent until removed manually
+
+  local connection   
   connection = game:GetService('RunService').Heartbeat:Connect(function(deltaTime)
-    self.WalkspeedStatusEffects[effectName] -= deltaTime
-    if self.WalkspeedStatusEffects[effectName] <= 0 then
-      self.WalkspeedStatusEffects[effectName] = nil
-      self.WalkspeedMultiplier -= normalizedPercentage
-      humanoid.WalkSpeed = baseWalkSpeed * self.WalkspeedMultiplier
-      connection:Disconnect()
+    userRegistry[effectName].TimeLeft -= deltaTime
+    if userRegistry[effectName].TimeLeft > 0 then return end
+
+    print('Removing effect: ' .. effectDescription.Name .. ' from user: ' .. tostring(user))
+    userRegistry[effectName] = nil
+    characterModule.Parameters[paramName] -= normalizedPercentage
+    connection:Disconnect() 
+
+    if changeSignal then
+      changeSignal:Fire(characterModule,{
+        Name = paramName,
+        NewValue = characterModule.Parameters[paramName],
+        OldValue = characterModule.Parameters[paramName] + normalizedPercentage
+      })
     end
   end)
 end
 
-function StatusEffects.get(player : Player)
-  local profile = StatusEffects.Profiles[player]
-  if not profile then
-    player = game:GetService("Players"):GetPlayerFromCharacter(player)
-    profile = StatusEffects.Profiles[player]
-    if not profile then return end
-  end
+function StatusEffects.RemoveEffect(effectName: string, user: Player | Model)
+  if not user then warn('No user provided') return end
+  if not effectName then warn('No effect provided') return end
 
-  return profile
-end
+  local userRegistry = StatusEffects.AddToRegistry(user)
+  if not userRegistry[effectName] then warn('No effect found') return end
 
-function StatusEffects.destruct(player : Player)
-  StatusEffects.Profiles[player] = nil
+  local effectData = userRegistry[effectName]
+  local characterModule = effectData.AffectedModule
+
+  characterModule.Parameters[effectName] -= effectData.Percentage
+  userRegistry[effectName] = nil
 end
 
 return StatusEffects

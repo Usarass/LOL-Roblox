@@ -1,109 +1,107 @@
 local Warp = require(game:GetService('ReplicatedStorage').Packages.Warp)
-
 local ShowCooldown = Warp.Server('ShowCooldown')
 
-local CooldownHandler = {}
-CooldownHandler.__index = CooldownHandler
+-- Weak-keyed registry so owner entries don't prevent GC
+local registries = setmetatable({}, { __mode = "k" })
 
-CooldownHandler.Handlers = {}
+local Cooldown = {}
+Cooldown.__index = Cooldown
 
-function CooldownHandler.new(owner)
-  if not owner then
-    warn("CooldownHandler:new called with no owner")
-    return nil
-  end
+-- Ensure registry exists for owner (returns the registry table)
+local function ensure(owner)
+    if not owner then
+        warn("Cooldown:ensure called with no owner")
+        return nil
+    end
+    local reg = registries[owner]
+    if reg then return reg end
 
-  local self = setmetatable({
-    Owner = owner,
-    ActiveCooldowns = {},
-  }, CooldownHandler)
+    reg = {
+        Owner = owner,
+        Active = {}
+    }
 
-  CooldownHandler.Handlers[owner] = self
-  return self
+    -- best-effort cleanup when Instance owners are removed
+    if typeof(owner) == "Instance" and owner.AncestryChanged then
+        pcall(function()
+            owner.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    registries[owner] = nil
+                end
+            end)
+        end)
+    end
+
+    registries[owner] = reg
+    return reg
 end
 
-function CooldownHandler.destruct(owner)
-  if not owner then
-    warn("CooldownHandler:destruct called with no owner")
-    return
-  end
-
-  if not CooldownHandler.Handlers[owner] then
-    warn("CooldownHandler:destruct called but owner not found in CooldownHandler.Handlers")
-    return
-  end
-  CooldownHandler.Handlers[owner] = nil
+-- Public: register owner (keeps previous API shape .new but returns registry)
+function Cooldown.new(owner)
+    return ensure(owner)
 end
 
-function CooldownHandler.GetProfile(owner)
-  if not owner then
-    warn("CooldownHandler:GetProfile called with no owner")
-    return nil
-  end
-
-  if not CooldownHandler.Handlers[owner] then
-    warn("CooldownHandler:GetProfile called but owner not found in CooldownHandler.Handlers")
-    return nil
-  end
-  return CooldownHandler.Handlers[owner]
+-- Public: remove registry and stop tracking owner
+function Cooldown.destruct(owner)
+    if not owner then return end
+    registries[owner] = nil
 end
 
-function CooldownHandler:Add(name, cooldown)
-  if not name or not cooldown then
-    warn("CooldownHandler:Add called with no name or cooldown")
-    return
-  end
+-- Add a cooldown for owner (auto-creates registry)
+function Cooldown.Add(owner, name, duration)
+    if not owner or not name or not duration then
+        warn("Cooldown.Add - missing arguments")
+        return
+    end
 
-  -- Only fire the UI remote when the owner is a Player (clients expect a Player)
-  if typeof(self.Owner) == "Instance" and self.Owner:IsA("Player") then
-    ShowCooldown:Fire(true, self.Owner, name, cooldown)
-  end
+    local reg = ensure(owner)
+    if not reg then return end
 
-  table.insert(self.ActiveCooldowns, name)
-  task.spawn(function()
-    task.wait(cooldown)
-    self:Remove(name)
-  end)
+    table.insert(reg.Active, name)
+
+    -- notify client UI only for Player owners
+    if typeof(owner) == "Instance" and owner:IsA("Player") then
+        pcall(function() ShowCooldown:Fire(true, owner, name, duration) end)
+    end
+
+    task.spawn(function()
+        task.wait(duration)
+        -- make sure registry still present
+        if registries[owner] then
+            Cooldown.Remove(owner, name)
+        end
+    end)
 end
 
-function CooldownHandler:Remove(name)
-  if not name then
-    return
-  end
+-- Remove a single cooldown
+function Cooldown.Remove(owner, name)
+    if not owner or not name then return end
+    local reg = registries[owner]
+    if not reg then return end
 
-  local cooldownIndex = table.find(self.ActiveCooldowns, name)
-  if not cooldownIndex then
-    return
-  end
-
-  table.remove(self.ActiveCooldowns, cooldownIndex)
+    local idx = table.find(reg.Active, name)
+    if idx then table.remove(reg.Active, idx) end
 end
 
-function CooldownHandler:RemoveAll(name)
-  if not name then
-    warn("CooldownHandler:RemoveAll called with no name")
-    return
-  end
+-- Remove all occurrences of a cooldown name
+function Cooldown.RemoveAll(owner, name)
+    if not owner or not name then return end
+    local reg = registries[owner]
+    if not reg then return end
 
-  local cooldownIndex = table.find(self.ActiveCooldowns, name)
-  if not cooldownIndex then
-    warn("CooldownHandler:RemoveAll called with name not found in ActiveCooldowns")
-    return
-  end
-
-  while cooldownIndex do
-    table.remove(self.ActiveCooldowns, cooldownIndex)
-    cooldownIndex = table.find(self.ActiveCooldowns, name)
-  end
+    local idx = table.find(reg.Active, name)
+    while idx do
+        table.remove(reg.Active, idx)
+        idx = table.find(reg.Active, name)
+    end
 end
 
-function CooldownHandler:Found(name)
-  if not name then
-    warn("CooldownHandler:Found called with no name")
-    return false
-  end
-
-  return table.find(self.ActiveCooldowns, name) ~= nil
+-- Check if owner has a cooldown
+function Cooldown.Found(owner, name)
+    if not owner or not name then return false end
+    local reg = registries[owner]
+    if not reg then return false end
+    return table.find(reg.Active, name) ~= nil
 end
 
-return CooldownHandler
+return Cooldown

@@ -6,6 +6,7 @@ local character = player.Character or player.CharacterAdded:Wait()
 local AnimationsService = require(game:GetService('ReplicatedStorage').Services.Animations)
 local Warp = require(game:GetService('ReplicatedStorage').Packages.Warp)
 local CharacterLiterals = require(game:GetService('ReplicatedStorage').Literals:WaitForChild('Characters'))
+local LoaderService = require(game:GetService('ReplicatedStorage').Services.LoaderService)
 
 local PlayAnimation = Warp.Client('PlayAnimation')
 local StopAllAnimations = Warp.Client('StopAllAnimations')
@@ -21,7 +22,6 @@ PlayAnimation:Connect(function(animationName : string, animationArgs : { [string
     return
   end
 
-  print("Playing animation: " .. animationName)
   local track = AnimationsService:GetTrack(animationName)
   track:Play()
   track:AdjustSpeed(animationArgs.AnimationSpeed or 1)
@@ -80,6 +80,8 @@ for _, characterLiterals in next, CharacterLiterals.CharacterStats do
     AnimationsService:CreateTrack(animator, animationName, animationId)
   end
 end
+
+LoaderService:PreloadAssets()
 
 game:GetService('Players').LocalPlayer.CharacterAdded:Connect(function(newCharacter)  
   AnimationsService:ReloadExisitngTracks(newCharacter:WaitForChild('Humanoid'):WaitForChild('Animator'))

@@ -37,9 +37,7 @@ local function OnCharacter(inputState, inputObj)
 	-- Get screen position of input (mouse or touch or gamepad)
 	local screenPos: Vector2
 
-	if inputObj.UserInputType == Enum.UserInputType.Touch then
-		screenPos = inputObj.Position
-	elseif inputObj.UserInputType == Enum.UserInputType.MouseButton1 then
+	if inputObj.UserInputType == Enum.UserInputType.MouseButton1 then
 		screenPos = UserInputService:GetMouseLocation()
 	-- elseif inputObj.UserInputType == Enum.UserInputType.Gamepad1 then
 	-- 	-- Optional: center of screen for gamepad support
@@ -142,11 +140,11 @@ Controls:BindAction("LeftClick", { Enum.UserInputType.MouseButton1 }, false, fun
 end) 
 
 Controls:BindAction("ActionF", {Enum.KeyCode.F}, false, function(actionName, inputState, inputObj)
-	if actionName ~= "ActionF" or inputState ~= Enum.UserInputState.Begin then
+	if actionName ~= "ActionF" then
 		return Enum.ContextActionResult.Pass
 	end
 
-	OnActionF:Fire(true)
+	OnActionF:Fire(true, inputState)
 end)
 
 Controls:BindAction("ActionC", {Enum.KeyCode.C}, false, function(actionName, inputState, inputObj)
@@ -158,17 +156,16 @@ Controls:BindAction("ActionC", {Enum.KeyCode.C}, false, function(actionName, inp
 end)
 
 Controls:BindAction('ActionE', {Enum.KeyCode.E}, false, function(actionName, inputState, inputObj)
-	if actionName ~= "ActionE" or inputState ~= Enum.UserInputState.Begin then
-		return Enum.ContextActionResult.Pass
-	end
+    if actionName ~= "ActionE" then
+        return Enum.ContextActionResult.Pass
+    end
 
-	OnActionE:Fire(true)
+    OnActionE:Fire(true, inputObj)
 end)
 
 Controls:BindAction("ActionR", {Enum.KeyCode.R}, false, function(actionName, inputState, inputObj)
 	if actionName ~= "ActionR" then
 		return Enum.ContextActionResult.Pass
 	end
-
 	OnActionR:Fire(true, inputState)
 end)

@@ -1,9 +1,9 @@
 local Character = require(script.Parent)
-local CharacterLiterals = require(game:GetService("ReplicatedStorage").Literals.Characters)
 local Consts = require(game:GetService("ReplicatedStorage").Literals.Consts)
 local Warp = require(game:GetService("ReplicatedStorage").Packages.Warp)
-local CooldownHanddler = require(game:GetService('ServerStorage').Modules.Cooldown)
-local NPCsLiterals = require(game:GetService("ReplicatedStorage").Literals.NPCs)
+local RunService = game:GetService("RunService")
+local CooldownHandler = require(game:GetService('ServerStorage').Modules.Cooldown)
+local NPCsLiterals = require(game:GetService("ReplicatedStorage").Literals.Characters)
 local StatusEffects = require(game:GetService('ServerStorage').Modules.StatusEffects)
 
 local PlayAnimationNPC = Warp.Server('PlayAnimationNPC')
@@ -11,24 +11,25 @@ local StopAnimationsNPC = Warp.Server('StopAnimationsNPC')
 local PlaySound = Warp.Server('PlaySound')
 local EmitCirleAoE = Warp.Server('EmitCircleAoE')
 local SpecialEvent = Warp.Server('SpecialEvent')
+local DamageService = require(game:GetService("ServerStorage").Services.DamageService)
 
 local Default = {}
 Default.__index = Default
 setmetatable(Default, { __index = Character })
 
 function Default.new(spawnCFrame : CFrame?)
-  local self = setmetatable(Character.new('Default', spawnCFrame), Default)
-  self.CooldownProfile = CooldownHanddler.new(self.Model)
-  self.StatusEffectProfile = StatusEffects.new(self.Model)
+  local self = setmetatable(Character.new('NPCDefault', spawnCFrame), Default)
+  self.CharacterName = 'NPCDefault'
   self.HuntedCharacter = nil
+  self.CharacterModule = self
 
-  local humanoid = self.Model:FindFirstChildOfClass("Humanoid")
+  local humanoid  = self.Model:FindFirstChildOfClass("Humanoid")
   if not humanoid then
     warn("Humanoid not found in NPC model: " .. self.Model.Name)
     return nil
   end 
 
-  local characterStats = NPCsLiterals.CharacterStats.Default
+  local characterStats = NPCsLiterals.CharacterStats.NPCDefault
   if not characterStats then
     error("Character stats for NPC '" .. 'Default' .. "' not found.")
   end
@@ -42,6 +43,12 @@ function Default.new(spawnCFrame : CFrame?)
 
     part:SetNetworkOwner(nil) -- Set network ownership to nil to allow server control
   end
+
+  humanoid.Died:Connect(function()
+    if type(self.Destroy) == "function" then
+      self:Destroy()
+    end
+  end)
 
   self:Find()
 
@@ -61,6 +68,7 @@ function Default:Find()
   local triggerPart = Instance.new("Part", self.Model)
   triggerPart.Name = "TriggerPart"
   triggerPart.Size = Vector3.new(diameterStuds * .9, 40, diameterStuds * .9)
+  -- triggerPart.Size = triggerPart.Size * .8
   triggerPart.Shape = Enum.PartType.Ball
   triggerPart.Transparency = 1
   triggerPart.CanCollide = false
@@ -68,6 +76,8 @@ function Default:Find()
   triggerPart.CanTouch = true
   triggerPart.Anchored = true
   triggerPart.CFrame = self.SpawnCFrame
+  -- keep reference for cleanup
+  self._triggerPart = triggerPart
 
   local npcRootPart = self.Model:FindFirstChild("HumanoidRootPart")
   if not npcRootPart then 
@@ -87,55 +97,99 @@ function Default:Find()
     return nil
   end
 
-  triggerPart.Touched:Connect(function(hit : BasePart)
-    if hit:IsDescendantOf(self.Model) then return end -- Ignore self collisions
+  -- Distance-based monitor: use RunService.Heartbeat to poll every 0.25s
+  local pollInterval = 0.25
+  local accumulator = 0
 
-    local enemyCharacter = hit:FindFirstAncestorOfClass("Model")
-    if not enemyCharacter then return end
-
-    local enemyHumanoid = enemyCharacter:FindFirstChildOfClass("Humanoid")
-    if not enemyHumanoid then return end
-
-    local enemyRootPart = enemyCharacter:FindFirstChild("HumanoidRootPart")
-    if not enemyRootPart then return end
-
-    if hit ~= enemyRootPart then return end -- Ensure the hit part is the root part
-
-    if self.HuntedCharacter ~= nil then return end
-    self.HuntedCharacter = enemyCharacter
-
-    -- print("Touched by: " .. enemyCharacter.Name)
-    EmitCirleAoE:Fires(true, self.Model, {WeldPart0 = triggerPart, Size = (reachDistanceStuds)})
-    self.Model:SetAttribute("Regen", false)
-
-    while self.HuntedCharacter do
-      task.wait()
-      self.HuntedCharacter = self:GetInRangeCharacter(triggerPart, overlapParams)
-      if not self.HuntedCharacter then print('Character not found in cirlce') break end
-
-      self:DefaultAttack(self.HuntedCharacter)
+  local hbConn
+  hbConn = RunService.Heartbeat:Connect(function(deltaTime)
+    if not (self.Model and self.Model.Parent) then
+      if hbConn then hbConn:Disconnect() end
+      return
     end
 
-    self.Model:SetAttribute("Regen", true)
-    npcHumanoid:MoveTo(triggerPart.Position) -- Move back to the original position after attack
+    accumulator = accumulator + deltaTime
+    if accumulator < pollInterval then
+      return
+    end
+    accumulator = 0
+
+    -- If currently hunting, refresh the hunted character; otherwise try to acquire one
+    if not self.HuntedCharacter then
+      local found = self:GetInRangeCharacter(triggerPart, overlapParams)
+      if found then
+        self.HuntedCharacter = found
+        EmitCirleAoE:Fires(true, self.Model, {WeldPart0 = triggerPart, Size = (reachDistanceStuds)})
+        self.Model:SetAttribute("Regen", false)
+
+        -- Spawn attack loop in its own task to avoid yielding inside Heartbeat
+        task.spawn(function()
+          while self.HuntedCharacter do
+            task.wait()
+            self.HuntedCharacter = self:GetInRangeCharacter(triggerPart, overlapParams)
+            if not self.HuntedCharacter then break end
+            self:DefaultAttack(self.HuntedCharacter)
+          end
+
+          -- Target lost; restore regen and return to trigger position
+          if self.Model then
+            self.Model:SetAttribute("Regen", true)
+          end
+          if npcHumanoid and npcHumanoid.MoveTo then
+            npcHumanoid:MoveTo(triggerPart.Position)
+          end
+          self.HuntedCharacter = nil
+        end)
+      end
+    else
+      -- If we already have a hunted character, ensure they are still valid
+      local still = self:GetInRangeCharacter(triggerPart, overlapParams)
+      if not still then
+        self.HuntedCharacter = nil
+      end
+    end
   end)
 
-  triggerPart.TouchEnded:Connect(function(hit : BasePart)
-    if hit:IsDescendantOf(self.Model) then return end -- Ignore self collisions
+  -- store connection for cleanup
+  self._hbConn = hbConn
 
-    local enemyCharacter = hit:FindFirstAncestorOfClass("Model")
-    if not enemyCharacter then return end
+  -- auto-destroy when model removed
+  if self.Model and self.Model.AncestryChanged then
+    self._ancestryConn = self.Model.AncestryChanged:Connect(function(_, parent)
+      if not parent then
+        if type(self.Destroy) == "function" then
+          self:Destroy()
+        end
+      end
+    end)
+  end
+end
 
-    local enemyHumanoid = enemyCharacter:FindFirstChildOfClass("Humanoid")
-    if not enemyHumanoid then return end
+function Default:Destroy()
+  -- Disconnect heartbeat
+  if self._hbConn then
+    self._hbConn:Disconnect()
+    self._hbConn = nil
+  end
 
-    local enemyRootPart = enemyCharacter:FindFirstChild("HumanoidRootPart")
-    if not enemyRootPart then return end
+  -- Disconnect ancestry listener
+  if self._ancestryConn then
+    self._ancestryConn:Disconnect()
+    self._ancestryConn = nil
+  end
 
-    if hit ~= enemyRootPart then return end -- Ensure the hit part is the root part
+  -- Destroy trigger part
+  if self._triggerPart then
+    if self._triggerPart.Parent then
+      self._triggerPart:Destroy()
+    end
+    self._triggerPart = nil
+  end
 
-    print("Touch ended by: " .. enemyCharacter.Name)
-  end)
+  -- Clear hunted target and other references
+  self.HuntedCharacter = nil
+  -- Note: do not destroy model here; caller may handle that
+  self.Model = nil
 end
 
 function Default:GetInRangeCharacter(part : BasePart, overlapParams : OverlapParams?)
@@ -164,6 +218,10 @@ function Default:GetInRangeCharacter(part : BasePart, overlapParams : OverlapPar
 
     if table.find(charactersInRange, enemyCharacter) then
       continue -- Already added this character
+    end
+
+    if enemyHumanoid.Health <= 0 then
+      continue -- Ignore dead characters
     end
 
     table.insert(charactersInRange, enemyCharacter)
@@ -206,13 +264,13 @@ function Character:DefaultAttack(enemyCharacter : Model)
   if not playerRootPart then return end
 
   local currentCharacter = self.NPCName
-  if not currentCharacter or not CharacterLiterals.CharactersNames[currentCharacter] then
+  if not currentCharacter or not NPCsLiterals.CharactersNames[currentCharacter] then
     warn("Current character name is invalid or not found in literals.")
     return
   end
 
   local currentStats = self.Parameters
-  local fullStats = CharacterLiterals.CharacterStats[self.NPCName]
+  local fullStats = NPCsLiterals.CharacterStats[self.NPCName]
   if not fullStats then
     warn("Full stats for NPC '" .. self.NPCName .. "' not found.")
     return
@@ -222,8 +280,6 @@ function Character:DefaultAttack(enemyCharacter : Model)
   if not playerHumanoid then return Enum.ContextActionResult.Pass end
 
   local lookAtCFrame = CFrame.new(enemyRootPart.Position, playerRootPart.Position)
-
-  local cooldownProfile = self.CooldownProfile
 
   local alignOrientation = playerRootPart:FindFirstChild("AlignOrientationOnEnemy")
   if alignOrientation == nil then 
@@ -242,7 +298,7 @@ function Character:DefaultAttack(enemyCharacter : Model)
     alignOrientation.Enabled = false
   end)
 
-  if cooldownProfile:Found('DefaultAttack') then return end
+  if CooldownHandler.Found(self.Model, 'DefaultAttack') then return end
   playerHumanoid:MoveTo(lookAtCFrame.Position + lookAtCFrame.LookVector * Consts.MeterToStudsMultiplier) -- Move to a position in front of the enemy character
 
   local canAttack = false
@@ -253,34 +309,26 @@ function Character:DefaultAttack(enemyCharacter : Model)
   end
 
   if canAttack then
-    if not cooldownProfile then
-      warn("Cooldown profile not found for NPC: " .. self.Model)
-      return
-    end
+    CooldownHandler.Add(self.Model, 'DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.AttackSpeed)
 
-    local animations = {
-      `{currentCharacter}AttackDefault1`,
-      `{currentCharacter}AttackDefault2`,
-      `{currentCharacter}AttackDefault3`
-    }
+    local choosenAnimation = math.random(1, 3)
+    choosenAnimation = `AttackDefault{choosenAnimation}`
 
-    cooldownProfile:Add('DefaultAttack', currentStats.DefaultAttackCooldown / currentStats.DefaultAttackSpeed)
-
-    local choosenAnimation = animations[math.random(1, #animations)]
     StopAnimationsNPC:Fires(true, self.Model)
     PlayAnimationNPC:Fires(true, self.Model, choosenAnimation, {
-      AnimationSpeed = currentStats.DefaultAttackSpeed,
+      AnimationSpeed = currentStats.AttackSpeed,
       AnimationId = fullStats.Animation[choosenAnimation] or 'rbxassetid://0', -- Default to a dummy animation ID if not provided
     })
-    PlaySound:Fires(true, fullStats.Sounds[`{currentCharacter}Whoosh`], {
+    PlaySound:Fires(true, fullStats.Sounds['Whoosh'], {
       Parent = playerRootPart,
     })
-    task.wait(currentStats.DefaultAttackDelay / currentStats.DefaultAttackSpeed) -- Wait for certain frame in the aniamtion
+    task.wait(currentStats.DefaultAttackDelay / currentStats.AttackSpeed) -- Wait for certain frame in the aniamtion
 
     if ((enemyRootPart.Position - playerRootPart.Position).Magnitude < attackDistance * Consts.MeterToStudsMultiplier) then
       -- Deal damage to the enemy character
-      enemyHumanoid:TakeDamage(currentStats.DefaultAttackDamage)
-      PlaySound:Fires(true, fullStats.Sounds[`{currentCharacter}LandedPunch`], {
+      -- enemyHumanoid:TakeDamage(currentStats.DefaultAttackDamage)
+      enemyHumanoid:TakeDamage(DamageService.CalculateAndApplyDamage(self.Model, game:GetService('Players'):GetPlayerFromCharacter(enemyCharacter), currentStats.DefaultAttackDamage))
+      PlaySound:Fires(true, fullStats.Sounds['LandedPunch'], {
         Parent = playerRootPart,
       })
     end
